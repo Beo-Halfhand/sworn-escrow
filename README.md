@@ -65,5 +65,11 @@ Nothing secret belongs in this repo. Seeds come from your own `.env`; the judge 
 ## Credits
 Fee sponsoring and the transaction tooling: **ODATANO's NIGHTGATE** ([@maxalexweber](https://x.com/maxalexweber)). Race results: **fōmz**'s pig race in Midnight City.
 
+## Known limits
+- **The judge can cancel at any time before settling.** cancel() has no deadline while the round is open. A cancelled round refunds every stake in full, so nobody loses funds, but the judge can void a round. A later version may add a cancel cutoff.
+- **Share size can't overflow with NIGHT.** claim() takes a 64-bit share. All 24B NIGHT that will ever exist is 2.4×10^16 STAR, about 768x under that limit. If this contract is ever changed to take a different token, cap the stake first.
+- **Leave a real reveal window.** Set claimFrom well after settleBy. If they're equal, winners can get about one second to reveal.
+- **Rounding dust stays in the contract,** as the comment on line 13 of `contracts/sworn-escrow.compact` says.
+
 ## License
 MIT

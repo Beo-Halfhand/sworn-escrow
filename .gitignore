@@ -12,3 +12,4 @@ midnight-level-db/
 .env*
 deployment.json
 deployment.refused-*.json
+.claude/
