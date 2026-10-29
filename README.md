@@ -1,5 +1,7 @@
 # sworn-escrow
 
+![Midnight](https://img.shields.io/badge/Midnight-preprod-1b2546) ![Compact](https://img.shields.io/badge/Compact-0.31.1-3d4f8a) ![tests](https://img.shields.io/badge/tests-11%2F11-1f7a4d) ![status](https://img.shields.io/badge/status-v0_test_NIGHT_only-f0b347) ![license](https://img.shields.io/badge/license-MIT-56607a)
+
 A pot on Midnight that nobody holds the keys to.
 
 Players stake a fixed amount of NIGHT (test NIGHT on preprod) with a sealed pick. The contract itself holds the pot. After the race, a judge posts the winning pick; winners reveal and pull their share. If no result arrives in time, everyone pulls their own stake back. There is no circuit that lets the deployer or the judge move the pot.
