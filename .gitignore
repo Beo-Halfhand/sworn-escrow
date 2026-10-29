@@ -1,0 +1,14 @@
+node_modules/
+contracts/managed/
+.wallet-state.json
+.ng-wallet-state.json
+.judge-key
+.ps-password
+.deploy-seed
+.players*/
+midnight-level-db/
+*.log
+*.bak
+.env*
+deployment.json
+deployment.refused-*.json
