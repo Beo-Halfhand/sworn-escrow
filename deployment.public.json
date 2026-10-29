@@ -1,0 +1,13 @@
+{
+ "address": "8109ce1274ecc9feb92b5a8fba0088ced5f61abcbbd3909cd238dfd0c68a69a9",
+ "round": "87db3bbefcbfc4105c58dfab6926630b1b075171256263423aa68042dc15cb5d",
+ "judgeId": "bfbf2f158d902d651ec0a16122f13fc61bf66b2af077c544a2765a69d68bd70d",
+ "stakeRaw": "10000000",
+ "close": "2026-10-28T19:00:00Z",
+ "settleBy": "2026-10-28T19:30:00Z",
+ "claimFrom": "2026-10-28T19:45:00Z",
+ "via": "nightgate",
+ "live": true,
+ "at": "2026-10-28T16:56:59.285Z",
+ "txHash": "00503c6cc9914b377fa7734d05be1c956c8eb71049842786129d75fee52ade10be"
+}

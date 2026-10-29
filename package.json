@@ -1,0 +1,38 @@
+{
+  "name": "sworn-escrow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A keyless pot on Midnight: sealed picks, a judge's result, pull-based claims. Test NIGHT on preprod.",
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "scripts": {
+    "compile": "compact compile contracts/sworn-escrow.compact contracts/managed/sworn-escrow",
+    "test": "node --test test/*.test.mjs",
+    "escrow": "node scripts/escrow.mjs"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "0.16.0",
+    "@midnight-ntwrk/midnight-js-contracts": "4.1.1",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "4.1.1",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "4.1.1",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "4.1.1",
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "4.1.1",
+    "@midnight-ntwrk/midnight-js-network-id": "4.1.1",
+    "@midnight-ntwrk/midnight-js-protocol": "4.1.1",
+    "@midnight-ntwrk/midnight-js-types": "4.1.1",
+    "@midnight-ntwrk/midnight-js-utils": "4.1.1",
+    "@midnight-ntwrk/testkit-js": "4.1.1",
+    "@midnightntwrk/wallet-sdk": "1.2.0",
+    "pino": "10.3.1",
+    "rxjs": "7.8.2",
+    "ws": "8.21.0"
+  },
+  "license": "MIT",
+  "author": "Beobrand Halfhand",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Beo-Halfhand/sworn-escrow"
+  }
+}

@@ -1,0 +1,120 @@
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+// sworn-escrow v0 — a pot that nobody holds the keys to.
+// Players stake a fixed amount of NIGHT (test NIGHT on preprod) with a sealed pick. The contract itself holds
+// the pot. After the close, the judge posts the winning pick. Winners reveal (pick + salt must match what they
+// sealed) and then pull their share with claim(): the contract pays them straight from its own balance.
+// Nobody — not the deployer, not the judge — has a circuit that sends the pot anywhere else.
+// Refunds (each player pulls their own stake back) if: the judge cancels, the judge never settles by settleBy,
+// or nobody reveals the winning pick by claimFrom.
+// v0 limits (on purpose): unshielded NIGHT, so stakes and payouts are visible on chain; picks stay sealed until
+// reveal. Rounding dust (< one unit per winner) stays in the contract. The judge is trusted to report the result
+// — its verdict is anchored off-chain (NIGHTGATE) so it can be checked, not changed.
+
+export enum Phase { open, settled, cancelled }
+
+export ledger round: Bytes<32>;                       // round id (public)
+export ledger judge: Bytes<32>;                       // playerId of the judge's key
+export ledger stake: Uint<64>;                        // fixed stake per entry, in NIGHT's smallest unit
+export ledger closeTime: Uint<64>;                    // entries end (unix seconds)
+export ledger settleBy: Uint<64>;                     // judge must settle or cancel before this
+export ledger claimFrom: Uint<64>;                    // reveals end, claims/refunds start
+export ledger phase: Phase;
+export ledger winner: Bytes<32>;                      // winning pick, set by the judge
+export ledger entries: Map<Bytes<32>, Bytes<32>>;     // player -> sealed pick
+export ledger payTo: Map<Bytes<32>, UserAddress>;     // player -> where their payout goes
+export ledger winners: Set<Bytes<32>>;                // players who revealed the winning pick
+export ledger paid: Set<Bytes<32>>;                   // players already paid (claim or refund)
+export ledger entryCount: Counter;
+export ledger rightCount: Counter;
+
+witness secretKey(): Bytes<32>;
+
+export pure circuit playerId(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "sworn-escrow:player:v0"), sk]);
+}
+
+export pure circuit commitmentOf(pick: Bytes<32>, salt: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([pad(32, "sworn-escrow:commit:v0"), pick, salt]);
+}
+
+constructor(roundId: Bytes<32>, judgeId: Bytes<32>, stakeAmount: Uint<64>, close: Uint<64>, settleDeadline: Uint<64>, claimStart: Uint<64>) {
+  assert(disclose(stakeAmount) > 0, "stake must be positive");
+  assert(disclose(close) < disclose(settleDeadline), "settleBy must be after close");
+  assert(disclose(settleDeadline) <= disclose(claimStart), "claimFrom must be at or after settleBy");
+  round = disclose(roundId);
+  judge = disclose(judgeId);
+  stake = disclose(stakeAmount);
+  closeTime = disclose(close);
+  settleBy = disclose(settleDeadline);
+  claimFrom = disclose(claimStart);
+  phase = Phase.open;
+}
+
+export circuit enter(commitment: Bytes<32>, payout: UserAddress): [] {
+  assert(phase == Phase.open, "entries are closed");
+  assert(blockTimeLt(closeTime), "entries are closed");
+  const me = disclose(playerId(secretKey()));
+  assert(!entries.member(me), "already entered");
+  receiveUnshielded(nativeToken(), stake as Uint<128>);
+  entries.insert(me, disclose(commitment));
+  payTo.insert(me, disclose(payout));
+  entryCount.increment(1);
+}
+
+export circuit settle(winningPick: Bytes<32>): [] {
+  assert(disclose(playerId(secretKey())) == judge, "judge only");
+  assert(phase == Phase.open, "already settled or cancelled");
+  assert(blockTimeGte(closeTime), "entries still open");
+  assert(blockTimeLt(settleBy), "too late to settle");
+  winner = disclose(winningPick);
+  phase = Phase.settled;
+}
+
+export circuit cancel(): [] {
+  assert(disclose(playerId(secretKey())) == judge, "judge only");
+  assert(phase == Phase.open, "already settled or cancelled");
+  phase = Phase.cancelled;
+}
+
+export circuit reveal(pick: Bytes<32>, salt: Bytes<32>): [] {
+  assert(phase == Phase.settled, "not settled");
+  assert(blockTimeLt(claimFrom), "reveal window closed");
+  const me = disclose(playerId(secretKey()));
+  assert(entries.member(me), "no entry");
+  assert(!winners.member(me), "already revealed");
+  assert(commitmentOf(pick, salt) == entries.lookup(me), "reveal does not match entry");
+  assert(disclose(pick) == winner, "not the winning pick");
+  winners.insert(me);
+  rightCount.increment(1);
+}
+
+// Pull-based claim_release(): the caller passes their share = floor(pot / winners); the contract checks it exactly.
+export circuit claim(share: Uint<64>): [] {
+  assert(phase == Phase.settled, "not settled");
+  assert(blockTimeGte(claimFrom), "claims not open yet");
+  const me = disclose(playerId(secretKey()));
+  assert(winners.member(me), "not a winner");
+  assert(!paid.member(me), "already paid");
+  const s = disclose(share);
+  const pot = stake * entryCount.read();
+  const n = rightCount.read();
+  assert(s * n <= pot, "share too large");
+  assert((s + 1) * n > pot, "share too small");
+  paid.insert(me);
+  sendUnshielded(nativeToken(), s as Uint<128>, right<ContractAddress, UserAddress>(payTo.lookup(me)));
+}
+
+export circuit refund(): [] {
+  const me = disclose(playerId(secretKey()));
+  assert(entries.member(me), "no entry");
+  assert(!paid.member(me), "already paid");
+  const cancelled = phase == Phase.cancelled;
+  const neverSettled = phase == Phase.open && blockTimeGte(settleBy);
+  const nobodyRight = phase == Phase.settled && blockTimeGte(claimFrom) && rightCount.read() == 0;
+  assert(cancelled || neverSettled || nobodyRight, "no refund: the round is live or has winners");
+  paid.insert(me);
+  sendUnshielded(nativeToken(), stake as Uint<128>, right<ContractAddress, UserAddress>(payTo.lookup(me)));
+}
