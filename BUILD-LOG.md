@@ -43,3 +43,34 @@ Midnight preprod indexer (GraphQL v4): every block from the pot deploy (3205601,
 
 Which ticket each refund paid: house-3 and sponsored-1030 match the identifiers our client logged. house-1 and house-2 are the other two paid refunds, matched by time to their timed-out attempts (21:12:45Z and 21:14:37Z builds); the indexer does not say which ticket a refund paid. The duplicate is house-2's second attempt, refused by the already-paid guard. Enters are numbered by time.
 — Claude Code (Mini) | 2026-11-01
+
+## 2026-11-01: SELF-FUNDED PATH PROVEN
+A full round ran on preprod with no NIGHTGATE and no sponsor: `scripts/escrow-self.mjs` signs, proves and pays its own DUST fees, and submits through our own preprod node. Pot `f15bc06d6727871723d45630abd4427ce4884953e547041924e484ec95c87e71`, stake 1 tNIGHT, one test ticket (`self-1`), then cancel and refund.
+
+### What ran
+| Step | Time (PT) | Block | Explorer tx hash | Ledger id |
+|---|---|---|---|---|
+| deploy | 10:04 AM | 3236863 | `193565d156e3630171f82a92bdc01e1f510100a21b323ba2c6ff553060237073` | `00f7344bec85ab2c7a67333a2560ec74a6868580a461c920e6c64ec32858e0829f` |
+| enter `self-1` | 10:34 AM | 3237150 | `d399ff0173d945a914523a5a44b9b6083439f256d95d5122eb17030c9c649085` | `0053036e43109f6b46bc4b638a38e8b3fdd4013b9b56bbcdc25816b5ac4da0728c` |
+| cancel (judge) | 10:37 AM | 3237175 | `70702d78bb0b9706b9e3aeb7eb4aee23779201e03e980f06ce27e08d45a9d11a` | `00df2a5a86cb2fd27bdbb73348b05d0a425f52c113f6799d2bd9521ed4290102a5` |
+| refund `self-1` | 10:40 AM | 3237213 | `871dbc4251a5c98cd8fd380f2c829e4e7673412454a0320de5d6306f4545a02a` | `003dbb2a7923b35b58ce72447330a440dae2502a035eac753502ad9d5aafebc252` |
+
+Times are the run's own log times. The preprod indexer's block times are 10:04:30, 10:33:12, 10:35:42 and 10:39:30 AM PST.
+- **Refund again:** `already paid. Nothing sent.` The script read the pot state first and sent nothing.
+- **`pot-runner.mjs` dry run** on this pot: `paid 1/1, nothing sent` (`DRY=1` sends nothing).
+- **Receipts, checked from the indexer** (`pot-receipts`, read-only): 1 deploy, 1 enter, 1 cancel, 1 refund, all applied. The pot's NIGHT balance went 0 → 1 → 1 → 0. **1 tNIGHT in, 1 out.** The hashes above are the indexer's.
+
+### Two bugs found on the way, and the fixes
+1. **Private-state password.** The deploy landed (block 3236863), but the first store of the contract's private state failed: the generated password was 64 hex characters, i.e. two character classes, and midnight-js 4.1.1 wants three or more. Fix: first a password that passes `validatePassword` (`b7a70c6`), then the real fix (`c89a980`): private state is held **in memory** (`scripts/mem-private-state.mjs`, same shape as nightgate-tx's). sworn-escrow keeps no private state between calls, since every call takes its secret from `.judge-key` or the ticket file, so there is no password at all now. `attach <address>` was added, which writes the pot file from on-chain state, and a deploy that landed is kept even if a later step fails.
+2. **Two copies of `onchain-runtime-v3`.** This repo's install has 3.1.2 at the top level (used by compact-runtime 0.16.0, which asks for `^3.0.0`) and 3.0.0 nested under midnight-js-protocol 4.1.1 (pinned). midnight-js-contracts wrapped the state with the 3.0.0 copy while the contract's `StateValue` came from 3.1.2, so every circuit call failed with `expected instance of StateValue` (first seen on `enter`; a deploy does not hit it). Fix: `scripts/pin-runtime.mjs`, a module resolve hook that sends every import of `onchain-runtime-v3` to protocol's 3.0.0 copy, which is the layout the NIGHTGATE notary already has. `node_modules` is untouched, and `NO_RUNTIME_PIN=1` turns the pin off to reproduce the bug.
+
+### Why the 10-28 self-funded attempt failed, and this one did not
+On 10-28 the self-funded path (`scripts/escrow.mjs`, the midnight-js wallet SDK) submitted with a **subscription**, `author_submitAndWatchExtrinsic`. The node closed that socket with `1000 Normal Closure` on every deploy, and the in-run retries then failed with `could not balance dust`. So the path was written off as "the node closes every submit".
+- **The cause was the submit method, not the node.** The same node accepts a **one-shot** `author_submitExtrinsic` on a fresh socket, which is what nightgate-tx's `submitFinalized` uses. It landed a transaction through that node at 11:27 the same day (10-28, per the notes in `escrow-self.mjs`), and it landed all four above.
+- **`escrow-self.mjs` therefore:** (1) submits one-shot; (2) makes one try per run, releasing the DUST note if the pool refuses; (3) never resends after a lost socket, but probes the indexer for the tx identifier for 90 s first; (4) reads the pot state before every step, so a step that is already done exits 0 and sends nothing. `SUBMIT=sdk` puts the old path back for comparison.
+- Endpoints come from the shell or an env file and are never printed (`scripts/endpoints.mjs`); there is no fallback to the public preprod node. All output goes through `scripts/mask-stdio.mjs`.
+
+### Commits (local at the time of writing)
+`51fb328` escrow-self and pot-runner v1 draft · `1fa3360` gitignore for pot files · `b7a70c6` private-state password, attach mode · `c89a980` one runtime copy, in-memory private state.
+
+— Claude Code (Mini) | 2026-11-01
