@@ -36,20 +36,20 @@ import { randomBytes, createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { inspect } from 'node:util';
 import pino from 'pino';
-import { HDWallet, Roles, WalletFacade, ShieldedWallet, DustWallet, UnshieldedWallet, createKeystore, PublicKey, NoOpTransactionHistoryStorage } from '@midnightntwrk/wallet-sdk';
-import * as ledgerV from '@midnight-ntwrk/midnight-js-protocol/ledger';
-import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
-import { setNetworkId, getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
-import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-js';
-import { deployContract, submitCallTx } from '@midnight-ntwrk/midnight-js-contracts';
-import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
-import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
-import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
-import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
-import { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
-import { Contract, ledger, pureCircuits, Phase } from '../contracts/managed/sworn-escrow/contract/index.js';
-import { validatePassword } from '@midnight-ntwrk/midnight-js-utils';
+import { runtimePin } from './pin-runtime.mjs';   // one onchain-runtime-v3 copy; every Midnight module below is loaded AFTER it (dynamic import)
+import { InMemoryPrivateStateProvider } from './mem-private-state.mjs';
 import { loadEndpoints } from './endpoints.mjs';
+const { HDWallet, Roles, WalletFacade, ShieldedWallet, DustWallet, UnshieldedWallet, createKeystore, PublicKey, NoOpTransactionHistoryStorage } = await import('@midnightntwrk/wallet-sdk');
+const ledgerV = await import('@midnight-ntwrk/midnight-js-protocol/ledger');
+const { unshieldedToken } = ledgerV;
+const { setNetworkId, getNetworkId } = await import('@midnight-ntwrk/midnight-js-network-id');
+const { CompiledContract } = await import('@midnight-ntwrk/midnight-js-protocol/compact-js');
+const { deployContract, submitCallTx } = await import('@midnight-ntwrk/midnight-js-contracts');
+const { indexerPublicDataProvider } = await import('@midnight-ntwrk/midnight-js-indexer-public-data-provider');
+const { httpClientProofProvider } = await import('@midnight-ntwrk/midnight-js-http-client-proof-provider');
+const { NodeZkConfigProvider } = await import('@midnight-ntwrk/midnight-js-node-zk-config-provider');
+const { MidnightWalletProvider } = await import('@midnight-ntwrk/testkit-js');
+const { Contract, ledger, pureCircuits, Phase } = await import('../contracts/managed/sworn-escrow/contract/index.js');
 
 setNetworkId('preprod');
 const [mode = 'state', ...args] = process.argv.slice(2);
@@ -61,20 +61,9 @@ const PLAYERS = process.env.PLAYERS_DIR ?? '.players-self';
 const SUBMIT = process.env.SUBMIT === 'sdk' ? 'sdk' : 'oneshot';
 const EP = loadEndpoints();
 const secretFile = (f) => { if (!existsSync(f)) writeFileSync(f, randomBytes(32).toString('hex') + '\n', { mode: 0o600, flag: 'wx' }); return readFileSync(f, 'utf8').trim(); };
-// Private-state store password (11-01 fix). midnight-js 4.1.1 validates it (midnight-js-utils validatePassword):
-// at least 16 chars, 3 of upper/lower/digit/special, no 4+ identical chars in a row, no 4-char runs like 1234/abcd.
-// escrow.mjs's .ps-password is 64 hex = 2 classes, so the first store failed AFTER the deploy landed (10-04 PT).
-// Own file + own store so the old file and DB stay untouched. Created once (600, never printed); an invalid existing file is refused, not overwritten.
-const PS_FILE = '.ps-password-self', PS_STORE = 'sworn-escrow-self-ps';
-function psPassword() {
-  if (!existsSync(PS_FILE)) {
-    let pw; do { pw = randomBytes(30).toString('base64').replace(/[+/=]/g, '') + '-Q7x'; } while ((() => { try { validatePassword(pw); return false; } catch { return true; } })());
-    writeFileSync(PS_FILE, pw + '\n', { mode: 0o600, flag: 'wx' });
-  }
-  const pw = readFileSync(PS_FILE, 'utf8').trim();
-  try { validatePassword(pw); } catch (e) { throw new Error(`${PS_FILE} does not meet the private-state password rule (${e.reason ?? e.message}); move it aside and rerun`); }
-  return pw;
-}
+// Private state is IN MEMORY (11-01, as nightgate-tx/escrow-ng): nothing on disk, no password. sworn-escrow keeps no private
+// state between calls (each call gets its sk from .judge-key or the ticket file); a deploy's maintenance signing key is not kept.
+// The 10:04 deploy failed on the level store's password rule (.ps-password = 64 hex, 2 classes); .ps-password-self is no longer used.
 const env = {
   walletNetworkId: 'preprod', networkId: 'preprod',
   indexer: EP.indexer, indexerWS: EP.indexerWS, node: EP.nodeHttp, nodeWS: EP.node,
@@ -111,6 +100,7 @@ async function openWallet() {
     dust: (c) => saved ? DustWallet(c).restore(saved.dust) : DustWallet(c).startWithSecretKey(dustSk, ledgerV.LedgerParameters.initialParameters().dust) });
   await wallet.start(zswap, dustSk);
   for (const line of EP.describe()) log(line);
+  log(runtimePin);
   log(saved ? `wallet restored from saved state (${saved.savedAt ?? '?'}) — catching up…` : 'no saved state — full sync from genesis (about an hour the first time)…');
   const prog = (x) => { if (!x || typeof x !== 'object') return '?'; const a = x.appliedIndex ?? x.appliedId, t = x.highestRelevantWalletIndex ?? x.highestTransactionId ?? x.highestIndex; const done = typeof x.isStrictlyComplete === 'function' ? x.isStrictlyComplete() : false; return `${a ?? '?'}/${t ?? '?'}${done ? ' ✓' : ''}`; };
   let last = null; const sub = wallet.state().subscribe({ next: (x) => { last = x; }, error: (e) => log(`state stream error: ${inspect(e, { depth: 6 })}`) });
@@ -188,7 +178,7 @@ async function providers(w) {
   pub.watchForTxData = (id) => Promise.race([watch(id), sleep(360000).then(() => { throw new Error(`${id} not on the indexer after 6 min: it may still land. Run "state" before any retry.`); })]);
   const zk = new NodeZkConfigProvider(ZK);
   return { wp, p: {
-    privateStateProvider: levelPrivateStateProvider({ privateStateStoreName: PS_STORE, privateStoragePasswordProvider: async () => psPassword(), accountId: w.ks.getBech32Address().toString() }),
+    privateStateProvider: new InMemoryPrivateStateProvider(),
     publicDataProvider: pub, zkConfigProvider: zk, proofProvider: httpClientProofProvider(env.proofServer, zk), walletProvider: wp, midnightProvider: wp } };
 }
 const txLine = (step, d) => log(`TX ${step} · hash ${d?.txHash ?? '?'} · id ${lastId ?? d?.txId ?? '?'} · block ${d?.blockHeight ?? '?'} · ${d?.status ?? '?'}`);
