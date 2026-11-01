@@ -4,6 +4,7 @@ contracts/managed/
 .ng-wallet-state.json
 .judge-key
 .ps-password
+.ps-password-self
 .deploy-seed
 .players*/
 midnight-level-db/

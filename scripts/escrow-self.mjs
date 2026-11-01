@@ -23,6 +23,7 @@
 //   node scripts/escrow-self.mjs endpoints        which variable each endpoint comes from (names + host only)
 //   node scripts/escrow-self.mjs balance          sync the fee wallet; print tNIGHT + DUST (raw) and DUST registration; send nothing
 //   POT_FILE=deployment.self-X.json node scripts/escrow-self.mjs deploy <stakeNight> <closeISO> <settleByISO> <claimFromISO>
+//   POT_FILE=deployment.self-X.json node scripts/escrow-self.mjs attach <address>   write POT_FILE from on-chain state (never overwrites; checks the judge)
 //   POT_FILE=… node scripts/escrow-self.mjs state [address]
 //   POT_FILE=… node scripts/escrow-self.mjs enter <player> <racer> | settle <racer> | cancel | reveal <player> | claim <player> | refund <player>
 // Seed: DEPLOY_SEED_FILE (default ../sealed-race/.deploy-seed); wallet state: .wallet-state.json. This is the same wallet escrow.mjs used on
@@ -47,6 +48,7 @@ import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config
 import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
 import { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
 import { Contract, ledger, pureCircuits, Phase } from '../contracts/managed/sworn-escrow/contract/index.js';
+import { validatePassword } from '@midnight-ntwrk/midnight-js-utils';
 import { loadEndpoints } from './endpoints.mjs';
 
 setNetworkId('preprod');
@@ -59,6 +61,20 @@ const PLAYERS = process.env.PLAYERS_DIR ?? '.players-self';
 const SUBMIT = process.env.SUBMIT === 'sdk' ? 'sdk' : 'oneshot';
 const EP = loadEndpoints();
 const secretFile = (f) => { if (!existsSync(f)) writeFileSync(f, randomBytes(32).toString('hex') + '\n', { mode: 0o600, flag: 'wx' }); return readFileSync(f, 'utf8').trim(); };
+// Private-state store password (11-01 fix). midnight-js 4.1.1 validates it (midnight-js-utils validatePassword):
+// at least 16 chars, 3 of upper/lower/digit/special, no 4+ identical chars in a row, no 4-char runs like 1234/abcd.
+// escrow.mjs's .ps-password is 64 hex = 2 classes, so the first store failed AFTER the deploy landed (10-04 PT).
+// Own file + own store so the old file and DB stay untouched. Created once (600, never printed); an invalid existing file is refused, not overwritten.
+const PS_FILE = '.ps-password-self', PS_STORE = 'sworn-escrow-self-ps';
+function psPassword() {
+  if (!existsSync(PS_FILE)) {
+    let pw; do { pw = randomBytes(30).toString('base64').replace(/[+/=]/g, '') + '-Q7x'; } while ((() => { try { validatePassword(pw); return false; } catch { return true; } })());
+    writeFileSync(PS_FILE, pw + '\n', { mode: 0o600, flag: 'wx' });
+  }
+  const pw = readFileSync(PS_FILE, 'utf8').trim();
+  try { validatePassword(pw); } catch (e) { throw new Error(`${PS_FILE} does not meet the private-state password rule (${e.reason ?? e.message}); move it aside and rerun`); }
+  return pw;
+}
 const env = {
   walletNetworkId: 'preprod', networkId: 'preprod',
   indexer: EP.indexer, indexerWS: EP.indexerWS, node: EP.nodeHttp, nodeWS: EP.node,
@@ -172,7 +188,7 @@ async function providers(w) {
   pub.watchForTxData = (id) => Promise.race([watch(id), sleep(360000).then(() => { throw new Error(`${id} not on the indexer after 6 min: it may still land. Run "state" before any retry.`); })]);
   const zk = new NodeZkConfigProvider(ZK);
   return { wp, p: {
-    privateStateProvider: levelPrivateStateProvider({ privateStateStoreName: 'sworn-escrow-ps', privateStoragePasswordProvider: async () => secretFile('.ps-password'), accountId: w.ks.getBech32Address().toString() }),
+    privateStateProvider: levelPrivateStateProvider({ privateStateStoreName: PS_STORE, privateStoragePasswordProvider: async () => psPassword(), accountId: w.ks.getBech32Address().toString() }),
     publicDataProvider: pub, zkConfigProvider: zk, proofProvider: httpClientProofProvider(env.proofServer, zk), walletProvider: wp, midnightProvider: wp } };
 }
 const txLine = (step, d) => log(`TX ${step} · hash ${d?.txHash ?? '?'} · id ${lastId ?? d?.txId ?? '?'} · block ${d?.blockHeight ?? '?'} · ${d?.status ?? '?'}`);
@@ -214,6 +230,28 @@ async function call(circuitId, who, sk, argsFor) {
   await w.save(); await w.wallet.stop(); await showState(addr);
 }
 
+// ---------- pot file from chain (attach, and deploy recovery) ----------
+async function gql(query) {
+  const r = await fetch(env.indexer, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query }), signal: AbortSignal.timeout(20000) });
+  const j = await r.json(); if (j.errors) throw new Error(`indexer: ${JSON.stringify(j.errors).slice(0, 300)}`); return j.data;
+}
+async function deployTxOf(address) {
+  const d = await gql(`{ contractAction(address:"${address}") { __typename ... on ContractDeploy { transaction { hash block { height } ... on RegularTransaction { identifiers transactionResult { status } } } } } }`);
+  const t = d?.contractAction?.transaction; return t ? { hash: t.hash, id: t.identifiers?.at(-1) ?? null, block: t.block?.height, status: t.transactionResult?.status } : null;
+}
+async function writePotFile(address, how) {
+  if (/(^|\/)deployment\.json$/.test(POT_FILE)) throw new Error('POT_FILE=deployment.json is the NIGHTGATE pot file — pick a new name');
+  if (existsSync(POT_FILE)) throw new Error(`${POT_FILE} exists — will not overwrite`);
+  const L = await pubLedger(address), tx = await deployTxOf(address);
+  const judgeId = hex(pureCircuits.playerId(Buffer.from(secretFile('.judge-key'), 'hex')));
+  if (hex(L.judge) !== judgeId) throw new Error('this pot\'s judge is NOT our .judge-key: settle/cancel would be refused. Not writing a pot file.');
+  const iso = (s) => new Date(Number(s) * 1000).toISOString().replace('.000Z', 'Z');
+  writeFileSync(POT_FILE, JSON.stringify({ address, txHash: tx?.hash ?? null, txId: tx?.id ?? lastId ?? null, round: hex(L.round), judgeId,
+    stakeRaw: String(L.stake), close: iso(L.closeTime), settleBy: iso(L.settleBy), claimFrom: iso(L.claimFrom), via: 'self', [how]: new Date().toISOString() }, null, 1) + '\n', { flag: 'wx', mode: 0o644 });
+  if (tx) log(`TX deploy · hash ${tx.hash} · id ${tx.id ?? '?'} · block ${tx.block} · ${tx.status}`);
+  log(`${how === 'attachedAt' ? 'ATTACHED' : 'RECOVERED'} ${address} · judge = our .judge-key ✓ · saved ${POT_FILE}`);
+}
+
 // Pre-checks: read the pot first; a step that is already done exits 0 without sending anything.
 const done = (msg) => { log(`already done: ${msg}. Nothing sent.`); return true; };
 async function preJudge(want) {
@@ -249,8 +287,19 @@ try {
     const round = randomBytes(32);
     const w = await openWallet(); const { p } = await providers(w);
     log(`deploying · stake ${stakeNight} tNIGHT · close ${close} · settleBy ${settleBy} · claimFrom ${claimFrom} — proving takes a minute…`);
-    const d = await deployContract(p, { compiledContract: compiled, privateStateId: 'deployer', initialPrivateState: { sk: randomBytes(32).toString('hex') },
-      args: [round, judgeId, stake, toSec(close), toSec(settleBy), toSec(claimFrom)] });
+    let d;
+    try {
+      d = await deployContract(p, { compiledContract: compiled, privateStateId: 'deployer', initialPrivateState: { sk: randomBytes(32).toString('hex') },
+        args: [round, judgeId, stake, toSec(close), toSec(settleBy), toSec(claimFrom)] });
+    } catch (e) {   // midnight-js stores private state only AFTER the deploy landed: a failure there must not lose the pot (10-04 PT, 11-01)
+      const landed = lastId ? await waitLanded(lastId, 60000) : null;
+      const dep = landed ? (await gql(`{ transactions(offset:{identifier:"${lastId}"}) { contractActions { __typename address } } }`))?.transactions?.[0]?.contractActions?.find((a) => a.__typename === 'ContractDeploy') : null;
+      if (!dep) throw e;
+      log(`deploy LANDED (${landed.status}, block ${landed.height}) but a step after landing failed: ${e?.message ?? e}`);
+      await w.save(); await w.wallet.stop();
+      await writePotFile(dep.address, 'recoveredAt'); await showState(dep.address);
+      throw new Error(`pot is live and ${POT_FILE} was written; only the local post-deploy store failed (deployer private state + maintenance signing key, not needed for any pot step)`);
+    }
     const pub = d.deployTxData.public, address = pub.contractAddress;
     txLine('deploy', pub);
     writeFileSync(POT_FILE, JSON.stringify({ address, txHash: pub.txHash ?? null, txId: lastId ?? pub.txId ?? null, round: hex(round), judgeId: hex(judgeId),
@@ -294,6 +343,9 @@ try {
   } else if (mode === 'refund') {
     const pl = loadPlayer(args[0]);
     if (!(await prePlayer(pl, 'refund'))) await call('refund', `player:${args[0]}`, pl.sk, []);
+  } else if (mode === 'attach') {
+    if (!/^[0-9a-f]{64}$/.test(args[0] ?? '')) throw new Error('usage: POT_FILE=deployment.<name>.json attach <64-hex contract address>');
+    needEndpoints(); await writePotFile(args[0], 'attachedAt'); await showState(args[0]);
   } else if (mode === 'state') {
     await showState(args[0] ?? addrOf());
   } else throw new Error(`unknown mode ${mode}`);
