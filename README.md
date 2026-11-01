@@ -45,7 +45,7 @@ npm install && npm run compile && npm test
 
 ## Running a round on preprod
 
-Two ways to submit transactions. The NIGHTGATE path is the one that ran the first round.
+Two ways to submit transactions. The NIGHTGATE path ran the first round (10-28). The self-funded path ran a full enter, cancel and refund round with no gateway on 11-01 (see [BUILD-LOG.md](BUILD-LOG.md)).
 
 **A. Through NIGHTGATE** (fees sponsored by ODATANO's NIGHTGATE; you need your own NIGHTGATE access)
 1. Clone a NIGHTGATE notary (we used [maxalexweber1/AGENT_MS](https://github.com/maxalexweber1/AGENT_MS)), set up its `.env` per its README, and copy `scripts/deploy-escrow-nightgate.mjs`, `scripts/escrow-ng.mjs` and `scripts/ng-address.mjs` into its `references/` folder.
@@ -57,7 +57,35 @@ Two ways to submit transactions. The NIGHTGATE path is the one that ran the firs
 
 NIGHTGATE currently won't sponsor a call that also moves the caller's own NIGHT, so `enter` and `claim` pay their own fee in DUST from the wallet; the others are sponsored.
 
-**B. Self-funded with midnight-js** (`scripts/escrow.mjs`): reference only. In our tests on 10-28 the node closed every submit from this path; it's kept for when that's resolved.
+**B. Self-funded, no gateway** (`scripts/escrow-self.mjs`): your own wallet pays its DUST fees and submits through your own preprod node. Proven on 2026-11-01 (pot `f15bc06d…`: deploy, enter, cancel, refund; receipts in [BUILD-LOG.md](BUILD-LOG.md)).
+
+Needs: the compiled contract (`npm run compile`), a proof server (default `127.0.0.1:6300`, or `MIDNIGHT_PROOF_SERVER`), a wallet seed file (`DEPLOY_SEED_FILE`) with test NIGHT whose NIGHT is registered for DUST, and a preprod node and indexer of your own (a hosted one with its access token in the URL works).
+
+1. **Endpoints from the environment.** Set `MIDNIGHT_NODE_WS` (`wss://…`), `MIDNIGHT_INDEXER` (`https://…`) and `MIDNIGHT_INDEXER_WS` (`wss://…`) in the shell. The names `NIGHTGATE_NODE_URL`, `NIGHTGATE_INDEXER_HTTP_URL` and `NIGHTGATE_INDEXER_WS_URL` also work, in the shell or in an env file named by `ENDPOINTS_ENV` (only those three names are read from it). There is **no built-in node**: with nothing set the script stops and says which variable is missing. Values are never printed; `node scripts/escrow-self.mjs endpoints` shows only which variable each one came from and the host.
+2. **Check without sending anything.** `node scripts/escrow-self.mjs balance` syncs the fee wallet and prints tNIGHT, DUST and the DUST registration (`state` and `endpoints` are read-only too).
+3. **Pot and tickets.** `POT_FILE` (default `deployment.self.json`) is where the pot's address and deadlines go; `PLAYERS_DIR` (default `.players-self`) holds one ticket file per player. `deploy` never overwrites an existing pot file. Both, and the judge key `.judge-key`, are gitignored.
+4. **Run a round**, from this repo's folder:
+   ```bash
+   export POT_FILE=deployment.self-test.json
+   node scripts/escrow-self.mjs deploy <stakeNight> <closeISO> <settleByISO> <claimFromISO>
+   node scripts/escrow-self.mjs enter <player> <racer>
+   node scripts/escrow-self.mjs settle <racer>          # judge; or: cancel
+   node scripts/escrow-self.mjs reveal <player>         # a winner
+   node scripts/escrow-self.mjs claim <player>          # a revealed winner, from claimFrom
+   node scripts/escrow-self.mjs refund <player>         # after a cancel
+   node scripts/escrow-self.mjs state                   # the pot's public ledger
+   node scripts/escrow-self.mjs attach <address>        # write POT_FILE for an existing pot (checks the judge key)
+   ```
+5. **Safe to repeat.** Every step reads the pot's state first. A step that is already done (already entered, settled, cancelled, revealed, paid) exits 0 and sends nothing (for example `this player is already paid`). Each run makes one try with a one-shot `author_submitExtrinsic`, and a lost socket is never resent: the script waits up to 90 s for the transaction on the indexer and then stops, so read the state before you retry.
+6. **Masked output.** `scripts/mask-stdio.mjs` is imported first by `escrow-self.mjs` and `pot-runner.mjs`. It masks the node's project id, access tokens, Midnight addresses and UUIDs in everything the process prints, including library log lines that would otherwise show the node URL. Every landed transaction prints one line: `TX <step> · hash <explorer hash> · id <ledger id> · block <n> · <status>`.
+7. **Two runtime copies.** If `npm install` leaves two copies of `@midnight-ntwrk/onchain-runtime-v3`, a circuit call fails with `expected instance of StateValue`. `scripts/pin-runtime.mjs` (loaded by the script) points every import at one copy; `NO_RUNTIME_PIN=1` turns that off.
+
+**One whole round: `scripts/pot-runner.mjs`.** It strings the steps together: deploy (or attach), wait for `closeTime`, read the race result from the fōmz board mirror, then `settle`, `reveal` and `claim` for a winner or `cancel` and `refund` for every local ticket. It works with either path:
+```bash
+DRY=1 node scripts/pot-runner.mjs --path self --pot deployment.self-test.json     # prints every step, sends nothing
+node scripts/pot-runner.mjs --path self --pot deployment.self-test.json --deploy <stakeNight> <closeISO> <settleByISO> <claimFromISO>
+```
+`--path ng` drives the NIGHTGATE scripts instead. The runner reads pot state before each step and treats a step that is done as success; if the outcome of a send is unknown, it polls state for 4 minutes before it tries again. It is a v1 draft: so far it has run as a dry run on this pot, not live.
 
 ## Keys
 Nothing secret belongs in this repo. Seeds come from your own `.env`; the judge key and player keys are generated locally (mode 600) and ignored by `.gitignore`. Never commit `.players*/`, `.judge-key`, wallet state, or `deployment.json` (it carries NIGHTGATE job and session ids). `deployment.public.json` holds the public fields of the first round.
