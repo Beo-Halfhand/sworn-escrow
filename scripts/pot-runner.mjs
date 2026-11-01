@@ -70,7 +70,7 @@ const RUNLOG = join(ESC, "logs", `pot-runner-${new Date().toISOString().replace(
 function log(m) { const line = `[${pt(clock.now())}] ${m}`; console.log(line); try { appendFileSync(RUNLOG, redact(line) + "\n"); } catch { /* log file is best effort */ } }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const short = (p) => String(p).replace(ESC + "/", "").replace(homedir(), "~");
-const racerHex = (name) => createHash("sha256").update(`sworn-escrow:racer:v0:${String(name).trim().toLowerCase()}`).digest("hex");
+const racerHex = (name) => createHash("sha256").update(`sworn-escrow:racer:v0:${String(name).normalize("NFC").trim().toLowerCase()}`).digest("hex");   // same as escrow-self racer()
 const raw = (x) => (x / 1_000_000n).toString() + (x % 1_000_000n ? "." + String(x % 1_000_000n).padStart(6, "0").replace(/0+$/, "") : "");
 
 async function waitUntil(ms, why) {

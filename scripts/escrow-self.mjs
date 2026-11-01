@@ -184,7 +184,9 @@ async function providers(w) {
 const txLine = (step, d) => log(`TX ${step} · hash ${d?.txHash ?? '?'} · id ${lastId ?? d?.txId ?? '?'} · block ${d?.blockHeight ?? '?'} · ${d?.status ?? '?'}`);
 
 // ---------- pot ----------
-const racer = (name) => new Uint8Array(createHash('sha256').update(`sworn-escrow:racer:v0:${String(name).trim().toLowerCase()}`).digest());
+// NFC first (11-01): the board's "fōmz" is precomposed (U+014D); a decomposed o + U+0304 typed in a shell would hash differently.
+// For ASCII names, and for NFC input, this is byte-identical to escrow.mjs / escrow-ng.
+const racer = (name) => new Uint8Array(createHash('sha256').update(`sworn-escrow:racer:v0:${String(name).normalize('NFC').trim().toLowerCase()}`).digest());
 const addrOf = () => { if (!existsSync(POT_FILE)) throw new Error(`no pot file ${POT_FILE} (set POT_FILE)`); return JSON.parse(readFileSync(POT_FILE, 'utf8')).address; };
 const playerFile = (n) => `${PLAYERS}/${String(n).replace(/[^a-z0-9_-]/gi, '')}.json`;
 const loadPlayer = (n) => { const f = playerFile(n); if (!existsSync(f)) throw new Error(`no player ${n} in ${PLAYERS} — enter first`); return JSON.parse(readFileSync(f, 'utf8')); };
