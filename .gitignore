@@ -12,4 +12,7 @@ midnight-level-db/
 .env*
 deployment.json
 deployment.refused-*.json
+deployment.*.json
+!deployment.public.json
+logs/pot-runner.lock
 .claude/
