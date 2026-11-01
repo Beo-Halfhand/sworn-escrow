@@ -74,3 +74,25 @@ On 10-28 the self-funded path (`scripts/escrow.mjs`, the midnight-js wallet SDK)
 `51fb328` escrow-self and pot-runner v1 draft · `1fa3360` gitignore for pot files · `b7a70c6` private-state password, attach mode · `c89a980` one runtime copy, in-memory private state.
 
 — Claude Code (Mini) | 2026-11-01
+
+## 2026-11-01 11:27 AM–2:25 PM PT — FIRST AUTOMATED ROUND: pot-runner, self-funded, ran itself
+Pot `a5a95bb3b0bee4013b99f90f66d1801cb61d22bb3e744a8af7f41ed473b47031`, stake 1 tNIGHT, self-funded (`scripts/escrow-self.mjs`, no NIGHTGATE). Deadlines: entries close 12:55 PM · settleBy 2:15 PM · claimFrom 2:20 PM PT. Two house tickets: house-a picked fōmz, house-b picked aabou. The judge's source was fōmz's race board.
+
+`scripts/pot-runner.mjs` was started at 11:27 AM with the pot already deployed and both tickets in, and nobody touched it after that. It waited for entries to close, read the board every minute, settled as judge once the 1:00 PM race was on the board, waited for claimFrom, saw that nobody had revealed the winner, refunded both tickets, and stopped.
+
+### What ran
+| Step | Time (PT) | Block | Explorer tx hash | Ledger id |
+|---|---|---|---|---|
+| deploy | 11:15 AM | 3237573 | `300a9b2b7b87aea82a8c678df406b1299c3adde6e5c3fb228cb8daacf0ea7dfd` | `003c8ed1f2e76c28a5995fe310433971c25662e39ea541f27d54b61f1899bbb50b` |
+| enter house-a (fōmz) | 11:22 AM | 3237646 | `05b5e2d4bfa701dfbc007064505338814f03127a9eb1f28a4b5d5d57a95046ca` | `0084ed23ef4d1bbdeea36ed0cc3493cf68c1dcc0e35ae2e1775fda21c60f236146` |
+| enter house-b (aabou) | 11:25 AM | 3237668 | `4799c6e556a6388b30cfc029b09969ed0e8c76d904c1efeb4349468e94fb3bd9` | `0021df849cfdf31cb3c9367f474c7a31d30f4c69a852a57a06659f8582c3bd6e80` |
+| settle kwigbo (judge) | 1:14 PM | 3238761 | `a6e1667f992f8aa90ed4dafcd0e933e5c011442d5caefc6f53e0fbd26e7e93d6` | `0027852f3f06bc58a8beeb4907b16cc3b63a547a1bbbfbb5c2a33bfeb623943958` |
+| refund house-a | 2:22 PM | 3239443 | `148c1cee67ea7355b629968e29004dec1507216b67aed49de87e90f1163a2aef` | `00bf95a74983d9148bdd249a30a755d4f20934ea5b7f000faf0932416549e0e3a3` |
+| refund house-b | 2:24 PM | 3239464 | `0afb7735489a30fc9ded02b062da41d4976ab7fb9f5e5d8646493a9bc20cc980` | `00a5fbee0bf6c34db457a45b5215432b825fb88af2c610126d06c22c29f5589553` |
+
+- **The race:** gate 1:00 PM PT; kwigbo won with 0.91 (77 racers). The runner first saw it on the board at 1:13 PM and settled at 1:14 PM, an hour before settleBy.
+- **Refunds:** neither ticket was on the winner, and nobody revealed kwigbo, so refunds opened at claimFrom (2:20 PM). The runner refunded house-a at 2:22 PM and house-b at 2:24 PM.
+- **End:** `END · phase settled · entries 2 · revealed 0 · local tickets paid 2/2`. Every transaction reported `SucceedEntirely`, and the runner read the pot state after each one to confirm it.
+- **Receipts, checked from the indexer** (`pot-receipts`, read-only, 3:07 PM): 1 deploy, 2 enter, 1 settle, 2 refund, all applied; no failed calls in the scanned windows. The pot's NIGHT balance went 0 → 1 → 2 → 2 → 1 → 0. **2 tNIGHT in, 2 out.** The hashes and blocks above are the indexer's; the deploy and enters landed before the runner started (11:15–11:25 AM).
+
+— Beobrand Halfhand | 2026-11-01
