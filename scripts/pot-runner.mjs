@@ -25,7 +25,8 @@
  *                                          NOW=<ISO> sets the simulated start time.
  *
  * --path self  scripts/escrow-self.mjs in this repo (own wallet pays DUST). POT_FILE=<pot>, PLAYERS_DIR (default .players-self).
- * --path ng    references/escrow-ng.mjs in ~/workspace/halfhand-notary (NIGHTGATE sponsors; enter/claim self-funded there).
+ * --path ng    escrow-ng.mjs in NOTARY_REFS_DIR, run from NOTARY_DIR (NIGHTGATE sponsors; enter/claim self-funded there).
+ *              NOTARY_DIR defaults to ~/workspace/halfhand-notary, NOTARY_REFS_DIR to its references/ folder.
  *              escrow-ng only knows deployment.json and .players-ng, so --pot must be deployment.json.
  *              An ng deploy (deploy-escrow-nightgate.mjs) writes deployment.json, so the runner refuses it while that file exists.
  * Board: BOARD (default the vault mirror vision/pig-laps/fomz-board/latest.json).
@@ -43,6 +44,7 @@ import { join, resolve, basename } from "node:path";
 
 const ESC = resolve(new URL("..", import.meta.url).pathname);
 const NOTARY = process.env.NOTARY_DIR ?? join(homedir(), "workspace", "halfhand-notary");
+const NOTARY_REFS = resolve(process.env.NOTARY_REFS_DIR ?? join(NOTARY, "references"));   // where escrow-ng.mjs and deploy-escrow-nightgate.mjs live
 const BOARD = process.env.BOARD ?? join(homedir(), "Library/CloudStorage/Dropbox/Zion/vision/pig-laps/fomz-board/latest.json");
 const DRY = process.env.DRY === "1";
 const MAX_TRIES = Number(process.env.MAX_TRIES ?? 2);
@@ -166,9 +168,9 @@ async function verdict(S) {
 function cmd(mode, ...a) {
   return PATH === "self"
     ? { cwd: ESC, argv: ["node", "scripts/escrow-self.mjs", mode, ...a], env: { POT_FILE: short(POT), PLAYERS_DIR: short(PDIR) } }
-    : { cwd: NOTARY, argv: ["node", "references/escrow-ng.mjs", mode, ...a], env: {} };
+    : { cwd: NOTARY, argv: ["node", join(NOTARY_REFS, "escrow-ng.mjs"), mode, ...a], env: {} };
 }
-const show = (c) => `cd ${short(c.cwd)} && ${Object.entries(c.env).map(([k, v]) => `${k}=${v} `).join("")}${c.argv.map((x) => (/\s/.test(x) ? `'${x}'` : x)).join(" ")}`;
+const show = (c) => `cd ${short(c.cwd)} && ${Object.entries(c.env).map(([k, v]) => `${k}=${v} `).join("")}${c.argv.map((x) => short(x)).map((x) => (/\s/.test(x) ? `'${x}'` : x)).join(" ")}`;
 function runChild(c) {
   log(`run: ${show(c)}`);
   return new Promise((res) => {
@@ -229,6 +231,8 @@ function lock() {
 
 async function main() {
   log(`pot-runner v1 · path ${PATH} · ${DRY ? "DRY: sends nothing" : "LIVE"} · pot ${short(POT)}${FIXTURE ? ` · fixture ${basename(FIXTURE)}` : ""}${DRY ? ` · simulated start ${pt(clock.t)}` : ""}`);
+  if (PATH === "ng" && !FIXTURE) for (const f of DEPLOY ? ["escrow-ng.mjs", "deploy-escrow-nightgate.mjs"] : ["escrow-ng.mjs"])   // fail now, not mid-round at settle time
+    if (!existsSync(join(NOTARY_REFS, f))) throw new Error(`${f} is not in ${short(NOTARY_REFS)}. Set NOTARY_REFS_DIR to the folder that holds it. Nothing was sent.`);
   lock();
   const fx = FIXTURE ? JSON.parse(readFileSync(FIXTURE, "utf8")) : null;
 
@@ -237,7 +241,7 @@ async function main() {
     const [stake, close, settleBy, claimFrom] = DEPLOY; if (!claimFrom) usage("--deploy needs <stakeNight> <closeISO> <settleByISO> <claimFromISO>");
     if (PATH === "self" && (basename(POT) === "deployment.json" || existsSync(POT))) throw new Error(`${short(POT)} exists or is deployment.json; deploy never overwrites. Attach instead (drop --deploy).`);
     if (PATH === "ng" && existsSync(POT)) throw new Error("deployment.json exists; deploy-escrow-nightgate.mjs would overwrite it. Attach to it, or deploy with --path self.");
-    const c = PATH === "self" ? cmd("deploy", stake, close, settleBy, claimFrom) : { cwd: NOTARY, argv: ["node", "references/deploy-escrow-nightgate.mjs", stake, close, settleBy, claimFrom], env: {} };
+    const c = PATH === "self" ? cmd("deploy", stake, close, settleBy, claimFrom) : { cwd: NOTARY, argv: ["node", join(NOTARY_REFS, "deploy-escrow-nightgate.mjs"), stake, close, settleBy, claimFrom], env: {} };
     if (DRY) { log(`DRY would run (DUST): ${show(c)}`); receipts.push({ label: "deploy", result: "dry" }); }
     else {
       const out = await runChild(c);
