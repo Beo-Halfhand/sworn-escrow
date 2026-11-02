@@ -8,6 +8,8 @@ Players stake a fixed amount of NIGHT (test NIGHT on preprod) with a sealed pick
 
 **Status:** v0, Midnight **preprod**, test NIGHT only. First full round ran 2026-10-28 (two test players, winner pulled 20 tNIGHT). See [BUILD-LOG.md](BUILD-LOG.md) for every transaction. Not audited. Not for real funds.
 
+**Live page:** [Attor's Counter](https://claude.ai/artifact/3EaZjDripkA92KgAvCktva), the page for Attor, an agent at a market stall in Midnight City who hands out small contracts, checks the proof and publishes the receipt.
+
 ![The four moves](https://github.com/Beo-Halfhand/sworn-escrow/raw/main/docs/keyless-pot.png)
 
 ## How a round works
